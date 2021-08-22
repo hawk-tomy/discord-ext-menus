@@ -29,35 +29,40 @@ import discord
 
 import itertools
 import inspect
-import bisect
 import logging
 import re
-from collections import OrderedDict, namedtuple
+from collections import namedtuple
 
 # Needed for the setup.py script
-__version__ = '1.0.0-a'
+__version__ = '1.0.0'
 
 # consistency with the `discord` namespaced logging
 log = logging.getLogger(__name__)
 
+
 class MenuError(Exception):
     pass
+
 
 class CannotEmbedLinks(MenuError):
     def __init__(self):
         super().__init__('Bot does not have embed links permission in this channel.')
 
+
 class CannotSendMessages(MenuError):
     def __init__(self):
         super().__init__('Bot cannot send messages in this channel.')
+
 
 class CannotAddReactions(MenuError):
     def __init__(self):
         super().__init__('Bot cannot add reactions in this channel.')
 
+
 class CannotReadMessageHistory(MenuError):
     def __init__(self):
         super().__init__('Bot does not have Read Message History permissions in this channel.')
+
 
 class Position:
     __slots__ = ('number', 'bucket')
@@ -93,17 +98,23 @@ class Position:
     def __repr__(self):
         return '<{0.__class__.__name__}: {0.number}>'.format(self)
 
+
 class Last(Position):
     __slots__ = ()
+
     def __init__(self, number=0):
         super().__init__(number, bucket=2)
 
+
 class First(Position):
     __slots__ = ()
+
     def __init__(self, number=0):
         super().__init__(number, bucket=0)
 
+
 _custom_emoji = re.compile(r'<?(?P<animated>a)?:?(?P<name>[A-Za-z0-9\_]+):(?P<id>[0-9]{13,20})>?')
+
 
 def _cast_emoji(obj, *, _custom_emoji=_custom_emoji):
     if isinstance(obj, discord.PartialEmoji):
@@ -118,6 +129,7 @@ def _cast_emoji(obj, *, _custom_emoji=_custom_emoji):
         name = groups['name']
         return discord.PartialEmoji(name=name, animated=animated, id=emoji_id)
     return discord.PartialEmoji(name=obj, id=None, animated=False)
+
 
 class Button:
     """Represents a reaction-style button for the :class:`Menu`.
@@ -212,6 +224,7 @@ class Button:
     def is_valid(self, menu):
         return not self.skip_if(menu)
 
+
 def button(emoji, **kwargs):
     """Denotes a method to be button for the :class:`Menu`.
 
@@ -248,12 +261,46 @@ def button(emoji, **kwargs):
         return func
     return decorator
 
-class _MenuMeta(type):
-    @classmethod
-    def __prepare__(cls, name, bases, **kwargs):
-        # This is needed to maintain member order for the buttons
-        return OrderedDict()
 
+def message(func):
+    """Denotes a method to be message handler for the :class:`Menu`.
+
+    The methods being wrapped must have  a ``message``
+    parameter of type :class:`discord.Message`.
+    """
+    func.__menu_message__ = True
+    return func
+
+
+def message_check(func):
+    """Denotes a method to be message check handler for the :class:`Menu`.
+
+    The methods being wrapped must have  a ``message``
+    parameter of type :class:`discord.Message`.
+    """
+    func.__menu_message_check__ = True
+    return func
+
+
+def create_button(emoji, **kwargs):
+    """Decorator that create Button instance.
+
+    The func being wrapped must have a ``payload``
+    parameter of type :class:`discord.RawReactionActionEvent`.
+
+    The keyword arguments are forwarded to the :class:`Button` constructor.
+
+    Parameters
+    ------------
+    emoji: Union[:class:`str`, :class:`discord.PartialEmoji`]
+        The emoji to use for the button.
+    """
+    def decorator(func):
+        return Button(_cast_emoji(emoji), func, **kwargs)
+    return decorator
+
+
+class _MenuMeta(type):
     def __new__(cls, name, bases, attrs, **kwargs):
         buttons = []
         new_cls = super().__new__(cls, name, bases, attrs)
@@ -266,27 +313,60 @@ class _MenuMeta(type):
                     try:
                         value.__menu_button__
                     except AttributeError:
-                        continue
+                        pass
                     else:
                         buttons.append(value)
+                        continue
+
+                    try:
+                        value.__menu_message__
+                    except AttributeError:
+                        pass
+                    else:
+                        new_cls._message = value
+                        continue
+
+                    try:
+                        value.__menu_message_check__
+                    except AttributeError:
+                        continue
+                    else:
+                        new_cls._message_check = value
         else:
             for elem, value in attrs.items():
                 try:
                     value.__menu_button__
                 except AttributeError:
-                    continue
+                    pass
                 else:
                     buttons.append(value)
+                    continue
+
+                try:
+                    value.__menu_message__
+                except AttributeError:
+                    pass
+                else:
+                    new_cls._message = value
+                    continue
+
+                try:
+                    value.__menu_message_check__
+                except AttributeError:
+                    continue
+                else:
+                    new_cls._message_check = value
 
         new_cls.__menu_buttons__ = buttons
         return new_cls
 
     def get_buttons(cls):
-        buttons = OrderedDict()
+        buttons = {}
         for func in cls.__menu_buttons__:
             emoji = func.__menu_button__
             buttons[emoji] = Button(emoji, func, **func.__menu_button_kwargs__)
         return buttons
+
 
 class Menu(metaclass=_MenuMeta):
     r"""An interface that allows handling menus by using reactions as buttons.
@@ -320,13 +400,21 @@ class Menu(metaclass=_MenuMeta):
         calling :meth:`send_initial_message`\, if for example you have a pre-existing
         message you want to attach a menu to.
     """
-    def __init__(self, *, timeout=180.0, delete_message_after=False,
-                          clear_reactions_after=False, check_embeds=False, message=None):
-
+    def __init__(
+        self,
+        *,
+        timeout=180.0,
+        delete_message_after=False,
+        clear_reactions_after=False,
+        check_embeds=False,
+        message=None,
+        is_wait_message=False
+    ):
         self.timeout = timeout
         self.delete_message_after = delete_message_after
         self.clear_reactions_after = clear_reactions_after
         self.check_embeds = check_embeds
+        self.is_wait_message = is_wait_message
         self._can_remove_reactions = False
         self.__tasks = []
         self._running = True
@@ -410,6 +498,12 @@ class Menu(metaclass=_MenuMeta):
             async def dummy():
                 raise MenuError('Menu has not been started yet')
             return dummy()
+
+    def add_message(self, func):
+        self._message = func
+
+    def add_message_check(self, func):
+        self._message_check = func
 
     def remove_button(self, emoji, *, react=False):
         """|maybecoro|
@@ -505,6 +599,7 @@ class Menu(metaclass=_MenuMeta):
                         await self.message.remove_reaction(reaction, self.__me)
 
                 return wrapped()
+
             async def dummy():
                 raise MenuError('Menu has not been started yet')
             return dummy()
@@ -550,6 +645,30 @@ class Menu(metaclass=_MenuMeta):
 
         return payload.emoji in self.buttons
 
+    def message_check(self, message):
+        """The function that used to check wheter the message should be processed.
+        This is passed to discord.ext.commands.Bot.wait_for (method).
+        you can set check function: message_check (decorator).
+
+        Thre should be no reason to override this function for most users.
+
+        Args:
+            message (discord.message): The message to check.
+
+        Returns:
+            bool: Whether the message should be processed.
+        """
+        if message.channel != self.ctx.channel:
+            return False
+        if message.author.id not in {self.bot.owner_id, self._author_id, *self.bot.owner_ids}:
+            return False
+        if self._message_check is None:
+            return True
+        try:
+            return self._message_check(self, message)
+        except Exception:
+            return False
+
     async def _internal_loop(self):
         try:
             self.__timed_out = False
@@ -558,9 +677,15 @@ class Menu(metaclass=_MenuMeta):
             tasks = []
             while self._running:
                 tasks = [
-                    asyncio.ensure_future(self.bot.wait_for('raw_reaction_add', check=self.reaction_check)),
-                    asyncio.ensure_future(self.bot.wait_for('raw_reaction_remove', check=self.reaction_check))
+                    asyncio.create_task(
+                        self.bot.wait_for('raw_reaction_add', check=self.reaction_check), name='reaction'),
+                    asyncio.create_task(
+                        self.bot.wait_for('raw_reaction_remove', check=self.reaction_check), name='reaction')
                 ]
+                if self.is_wait_message:
+                    tasks.append(
+                        asyncio.create_task(self.bot.wait_for('message', check=self.message_check), name='message')
+                    )
                 done, pending = await asyncio.wait(tasks, timeout=self.timeout, return_when=asyncio.FIRST_COMPLETED)
                 for task in pending:
                     task.cancel()
@@ -569,19 +694,25 @@ class Menu(metaclass=_MenuMeta):
                     raise asyncio.TimeoutError()
 
                 # Exception will propagate if e.g. cancelled or timed out
-                payload = done.pop().result()
-                loop.create_task(self.update(payload))
+                task = done.pop()
+                if task.get_name() == 'reaction':
+                    payload = task.result()
+                    loop.create_task(self.update(payload))
 
-                # NOTE: Removing the reaction ourselves after it's been done when
-                # mixed with the checks above is incredibly racy.
-                # There is no guarantee when the MESSAGE_REACTION_REMOVE event will
-                # be called, and chances are when it does happen it'll always be
-                # after the remove_reaction HTTP call has returned back to the caller
-                # which means that the stuff above will catch the reaction that we
-                # just removed.
+                    # NOTE: Removing the reaction ourselves after it's been done when
+                    # mixed with the checks above is incredibly racy.
+                    # There is no guarantee when the MESSAGE_REACTION_REMOVE event will
+                    # be called, and chances are when it does happen it'll always be
+                    # after the remove_reaction HTTP call has returned back to the caller
+                    # which means that the stuff above will catch the reaction that we
+                    # just removed.
 
-                # For the future sake of myself and to save myself the hours in the future
-                # consider this my warning.
+                    # For the future sake of myself and to save myself the hours in the future
+                    # consider this my warning.
+
+                else:
+                    msg = task.result()
+                    loop.create_task(self.update_msg(msg))
 
         except asyncio.TimeoutError:
             self.__timed_out = True
@@ -645,6 +776,21 @@ class Menu(metaclass=_MenuMeta):
         except Exception as exc:
             await self.on_menu_button_error(exc)
 
+    async def update_msg(self, msg):
+        """updates the menu after an event has been received.
+
+        Args:
+            msg (discord.message): The message event that triggred this update
+        """
+        if not self._running:
+            return
+        if self._message is None:
+            return
+        try:
+            await self._message(self, msg)
+        except Exception as exc:
+            await self.on_menu_msg_error(exc)
+
     async def on_menu_button_error(self, exc):
         """|coro|
 
@@ -661,6 +807,18 @@ class Menu(metaclass=_MenuMeta):
         # some users may wish to take other actions during or beyond logging
         # which would require awaiting, such as stopping an erroring menu.
         log.exception("Unhandled exception during menu update.", exc_info=exc)
+
+    async def on_menu_msg_error(self, exc):
+        """Handles reporting of errors hile updateing the menu from events.
+        The default behaviour is to log the exception.
+
+        This may be overriden by subclasses.
+
+        Args:
+            exc (Exception):
+                The exception which was raised during a menu update.
+        """
+        log.exception("Unhandled exception during menu update by msg.", exc_info=exc)
 
     async def start(self, ctx, *, channel=None, wait=False):
         """|coro|
@@ -728,7 +886,7 @@ class Menu(metaclass=_MenuMeta):
         A coroutine that is called when the menu loop has completed
         its run. This is useful if some asynchronous clean-up is
         required after the fact.
-        
+
         Parameters
         --------------
         timed_out: :class:`bool`
@@ -767,6 +925,7 @@ class Menu(metaclass=_MenuMeta):
         for task in self.__tasks:
             task.cancel()
         self.__tasks.clear()
+
 
 class PageSource:
     """An interface representing a menu page's data source for the actual menu page.
@@ -888,6 +1047,7 @@ class PageSource:
         """
         raise NotImplementedError
 
+
 class MenuPages(Menu):
     """A special type of Menu dedicated to pagination.
 
@@ -897,10 +1057,27 @@ class MenuPages(Menu):
         The current page that we are in. Zero-indexed
         between [0, :attr:`PageSource.max_pages`).
     """
-    def __init__(self, source, **kwargs):
+    def __init__(
+        self,
+        source,
+        *,
+        timeout=180.0,
+        delete_message_after=False,
+        clear_reactions_after=False,
+        check_embeds=False,
+        message=None,
+        is_wait_message=False
+    ):
         self._source = source
         self.current_page = 0
-        super().__init__(**kwargs)
+        super().__init__(
+            timeout=timeout,
+            delete_message_after=delete_message_after,
+            clear_reactions_after=clear_reactions_after,
+            check_embeds=check_embeds,
+            message=message,
+            is_wait_message=is_wait_message
+        )
 
     @property
     def source(self):
@@ -939,9 +1116,9 @@ class MenuPages(Menu):
         if isinstance(value, dict):
             return value
         elif isinstance(value, str):
-            return { 'content': value, 'embed': None }
+            return {'content': value, 'embed': None}
         elif isinstance(value, discord.Embed):
-            return { 'embed': value, 'content': None }
+            return {'embed': value, 'content': None}
 
     async def show_page(self, page_number):
         page = await self._source.get_page(page_number)
@@ -1015,6 +1192,7 @@ class MenuPages(Menu):
         """stops the pagination session."""
         self.stop()
 
+
 class ListPageSource(PageSource):
     """A data source for a sequence of items.
 
@@ -1065,7 +1243,9 @@ class ListPageSource(PageSource):
             base = page_number * self.per_page
             return self.entries[base:base + self.per_page]
 
+
 _GroupByEntry = namedtuple('_GroupByEntry', 'key items')
+
 
 class GroupByPageSource(ListPageSource):
     """A data source for grouped by sequence of items.
@@ -1128,6 +1308,7 @@ class GroupByPageSource(ListPageSource):
         """
         raise NotImplementedError
 
+
 def _aiter(obj, *, _isasync=inspect.iscoroutinefunction):
     cls = obj.__class__
     try:
@@ -1139,6 +1320,7 @@ def _aiter(obj, *, _isasync=inspect.iscoroutinefunction):
     if _isasync(async_iter):
         raise TypeError('{0.__name__!r} object is not an async iterable'.format(cls))
     return async_iter
+
 
 class AsyncIteratorPageSource(PageSource):
     """A data source for data backed by an asynchronous iterator.
