@@ -304,6 +304,8 @@ class _MenuMeta(type):
     def __new__(cls, name, bases, attrs, **kwargs):
         buttons = []
         new_cls = super().__new__(cls, name, bases, attrs)
+        message_func = None
+        message_check_func = None
 
         inherit_buttons = kwargs.pop('inherit_buttons', True)
         if inherit_buttons:
@@ -323,7 +325,7 @@ class _MenuMeta(type):
                     except AttributeError:
                         pass
                     else:
-                        new_cls._message = value
+                        message_func = value
                         continue
 
                     try:
@@ -331,7 +333,7 @@ class _MenuMeta(type):
                     except AttributeError:
                         continue
                     else:
-                        new_cls._message_check = value
+                        message_check_func = value
         else:
             for elem, value in attrs.items():
                 try:
@@ -347,7 +349,7 @@ class _MenuMeta(type):
                 except AttributeError:
                     pass
                 else:
-                    new_cls._message = value
+                    message_func = value
                     continue
 
                 try:
@@ -355,9 +357,11 @@ class _MenuMeta(type):
                 except AttributeError:
                     continue
                 else:
-                    new_cls._message_check = value
+                    message_check_func = value
 
         new_cls.__menu_buttons__ = buttons
+        new_cls._message = message_func
+        new_cls._message_check = message_check_func
         return new_cls
 
     def get_buttons(cls):
