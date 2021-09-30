@@ -25,13 +25,13 @@ DEALINGS IN THE SOFTWARE.
 """
 
 import asyncio
-import discord
-
-import itertools
 import inspect
+import itertools
 import logging
 import re
 from collections import namedtuple
+
+import discord
 
 # Needed for the setup.py script
 __version__ = '1.0.0'
@@ -225,6 +225,64 @@ class Button:
         return not self.skip_if(menu)
 
 
+class MessageHandler:
+    def __init__(self, handler):
+        self.handler = handler
+
+    def __call__(self, menu, message):
+        return self._handler(menu, message)
+
+    @property
+    def handler(self):
+        return self._handler
+
+    @handler.setter
+    def handler(self, value):
+        try:
+            menu_self = value.__self__
+        except AttributeError:
+            pass
+        else:
+            if isinstance(menu_self, Menu):
+                raise TypeError(f'handler bound method must be from Menu not {menu_self!r}')
+
+            value = value.__func__
+
+        if not callable(value):
+            raise TypeError(f'handler must be a function not {value!r}')
+
+        self._handler = value
+
+
+class MessageCheckHandler:
+    def __init__(self, handler):
+        self.handler = handler
+
+    def __call__(self, menu, message):
+        return self._handler(menu, message)
+
+    @property
+    def handler(self):
+        return self._handler
+
+    @handler.setter
+    def handler(self, value):
+        try:
+            menu_self = value.__self__
+        except AttributeError:
+            pass
+        else:
+            if isinstance(menu_self, Menu):
+                raise TypeError(f'handler bound method must be from Menu not {menu_self!r}')
+
+            value = value.__func__
+
+        if not inspect.iscoroutinefunction(value):
+            raise TypeError(f'handler must be a coroutine not {value!r}')
+
+        self._handler = value
+
+
 def button(emoji, **kwargs):
     """Denotes a method to be button for the :class:`Menu`.
 
@@ -360,8 +418,8 @@ class _MenuMeta(type):
                     message_check_func = value
 
         new_cls.__menu_buttons__ = buttons
-        new_cls._message = message_func
-        new_cls._message_check = message_check_func
+        new_cls._message = MessageHandler(message_func)
+        new_cls._message_check = MessageCheckHandler(message_check_func)
         return new_cls
 
     def get_buttons(cls):
