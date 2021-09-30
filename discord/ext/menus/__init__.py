@@ -248,8 +248,8 @@ class MessageHandler:
 
             value = value.__func__
 
-        if not callable(value):
-            raise TypeError(f'handler must be a function not {value!r}')
+        if not inspect.iscoroutinefunction(value):
+            raise TypeError(f'handler must be a coroutine not {value!r}')
 
         self._handler = value
 
@@ -277,8 +277,8 @@ class MessageCheckHandler:
 
             value = value.__func__
 
-        if not inspect.iscoroutinefunction(value):
-            raise TypeError(f'handler must be a coroutine not {value!r}')
+        if not callable(value):
+            raise TypeError(f'handler must be a function not {value!r}')
 
         self._handler = value
 
