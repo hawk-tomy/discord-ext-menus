@@ -418,8 +418,8 @@ class _MenuMeta(type):
                     message_check_func = value
 
         new_cls.__menu_buttons__ = buttons
-        new_cls._message = MessageHandler(message_func)
-        new_cls._message_check = MessageCheckHandler(message_check_func)
+        new_cls._message = message_func or MessageHandler(message_func)
+        new_cls._message_check = message_check_func or MessageCheckHandler(message_check_func)
         return new_cls
 
     def get_buttons(cls):
