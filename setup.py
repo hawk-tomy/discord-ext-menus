@@ -33,6 +33,6 @@ setup(
     packages=['discord.ext.menus'],
     license='MIT',
     description='An extension module to make reaction based menus with discord.py',
-    install_requires=['discord.py~=1.7'],
+    install_requires=['discord.py@git+https://github.com/hawk-tomy/discord.py'],
     python_requires='>=3.9'
 )
